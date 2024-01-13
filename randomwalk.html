@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D Random Walk with Three.js</title>
+    <style>
+        body { margin: 0; }
+        canvas { display: block; }
+        #stats { position: absolute; top: 0; left: 0; cursor: pointer; opacity: 0.7; z-index: 10000; }
+    </style>
+</head>
+<body>
+   
+<div id="stats"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/stats.js/r16/Stats.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.4.0/gl-matrix-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js"></script>
+
+<script>
+
+    // Set up scene
+    const W=window.innerWidth;
+    const H=window.innerHeight;
+    const scene = new THREE.Scene();
+    const camera = new THREE.OrthographicCamera(W / -2, W / 2, H / 2, H / -2, 1, 1000);
+    const renderer = new THREE.WebGLRenderer();
+    renderer.setSize(W, H);
+    document.body.appendChild(renderer.domElement);
+
+    // Set up points
+    const numPoints = 5000;//10000;//300000;
+    const pointsGeometry = new THREE.BufferGeometry();
+    const pointsMaterial = new THREE.PointsMaterial({ size:4, vertexColors: true, transparent:true});
+    const points = new THREE.Points(pointsGeometry, pointsMaterial);
+
+    // Add points to scene
+    scene.add(points);
+
+    // Random walk animation
+    // class VecArray {
+    //     constructor(dim, length) {
+    //         this.array = new Float32Array(length * dim);
+    //         this.dim = dim;
+    //         this.length = length;
+    //         // return new Proxy(this, {
+    //         //     get: (obj, key) => {
+    //         //         if (typeof(key) === 'string' && (Number.isInteger(Number(key))))
+    //         //             return vec2.fromValues(...obj.array.subarray(key, key + obj.dim))
+    //         //         else 
+    //         //             return obj[key]
+    //         //     },
+    //         //     set: (obj, key, value) => {
+    //         //         for (let j = 0; j < obj.dim; j++) obj[key + j] = value[j];
+    //         //     }
+    //         // })
+    //     }
+    //     map(callback) {
+    //         const result = new Float32Array(this.array.length);
+    //         for (let i = 0; i < this.array.length; i += this.dim) {
+    //             const mappedValues = callback(vec2.fromValues(...this.array.subarray(2*i, 2*i + this.dim)));                
+    //             for (let j = 0; j < this.dim; j++) result[i + j] = mappedValues[j];
+    //         }
+    //         return new VecArray(this.dim, result);
+    //     }
+    //     imap(callback) {
+    //         for (let i = 0; i < this.array.length; i += this.dim) {
+    //             const mappedValues = callback(vec2.fromValues(...this.array.subarray(2*i, 2*i + this.dim)));
+    //             for (let j = 0; j < this.dim; j++) this.array[2*i + j] = mappedValues[j];
+    //         }
+    //         return this
+    //     }
+    // }
+    // const positions = new VecArray(2, numPoints);
+    // const velocity = new VecArray(2, numPoints);
+    let positions = new Float32Array(2 * numPoints);
+    let npositions = new Float32Array(2 * numPoints);
+    let velocity = new Float32Array(2 * numPoints);
+    let nvelocity = new Float32Array(2 * numPoints);
+    const groups = new Uint16Array(numPoints); for(let i of _.range(groups.length)) groups[i]=Math.floor(2*Math.random());
+    const groupscolors = [[0.5,1,0,0.3],[1,0,1,0.3]]
+    const colors = new Float32Array(4 * numPoints); for(let i of _.range(numPoints)) for(let j of _.range(4)) colors[4*i+j]=groupscolors[groups[i]][j];
+    const cellsize=20;
+    const gridW = Math.ceil(W/cellsize);
+    const gridH = Math.ceil(H/cellsize);
+    // const grid = new Uint32Array(numPoints);
+    let grid = _.range(1+gridW*gridH).map(x=>[]);
+    let ngrid = _.range(1+gridW*gridH).map(x=>[]);
+
+    assignGrid = (px,py)=>(-W/2<px) && (px<W/2) && (-H/2<py) && (py<H/2) ?1+Math.floor((px/W +0.5)*gridW) + gridW*Math.floor((py/H +0.5)*gridH) :0;
+    
+    class Force {
+        constructor(X,Y){
+            this.X=X;
+            this.Y=Y;
+            this.meanY=[]; for(let i=0;i<Y.length-1;i++) this.meanY.push((Y[i]+Y[i+1])/2); this.meanY.push(Y.at(-1));
+            this.area =[]; for(let i=0;i<Y.length-1;i++) this.area.push(this.meanY[i]*(X[i+1]-X[i]));
+            this.sumarea = this.area.reduce((l,x)=>{l.push(l.at(-1)+x);return l;},[0])
+            this.slope=[]; for(let i=0;i<Y.length-1;i++) this.slope.push((Y[i+1]-Y[i])/(X[i+1]-X[i])); this.slope.push(0);
+        }
+        value(t){
+            const i=this.X.findLastIndex(x=>x<t);
+            const t2=t-this.X[i];
+            return this.Y[i]+this.slope[i]*t2;
+        }
+        integral(t){
+            // t=Math.abs(t);
+            const i=this.X.findLastIndex(x=>x<t);
+            const t2=t-this.X[i];
+            return this.sumarea[i] + t2 * (this.Y[i]+(this.Y[i]+this.slope[i]*t2))/2;
+        }
+    }
+
+    interp = (X,Y)=>(t)=>{if(X.at(-1)<t) return Y.at(-1); const i=X.findLastIndex(x=>x<t);return THREE.MathUtils.mapLinear(t,X[i],X[i+1],Y[i],Y[i+1]);}
+    
+    force=[
+        [new Force([0,20],[ 0.1,0]) , new Force([0,20],[-0.1,0])],
+        [new Force([0,20],[-0.1,0]) , new Force([0,20],[ 0.1,0])]
+    ];
+
+
+    // 46-60
+
+    // const df = {
+    //     length: numPoints,
+    //     p: new Float32Array(2 * numPoints),
+    //     v: new Float32Array(2 * numPoints),
+    // }
+    // df.imap = (f)=>{
+    //     for (let i = 0; i < df.length; i += 1) {
+    //         // const old= {p: df.p.subarray(2*i,2*i+2), v: df.v.subarray(2*i,2*i+2) };
+    //         // if(i==0) console.log(old);
+    //         const obj = f(df.p.subarray(2*i,2*i+2), df.v.subarray(2*i,2*i+2) );
+    //         for (let j = 0; j < 2; j += 1) df.p[2*i+j] = obj.p[j];
+    //         for (let j = 0; j < 2; j += 1) df.v[2*i+j] = obj.v[j];
+    //         // if(i==0) console.log(obj);
+    //     }
+    // }
+    // df.imap((p,v)=>{
+    //     return {p:vec2.fromValues(0* (Math.random()-0.5), 0* (Math.random()-0.5)), v:vec2.fromValues(0* (Math.random()-0.5), 0* (Math.random()-0.5))}})
+
+    // positions.imap(x=>vec2.fromValues((Math.random()-0.5) *0, (Math.random()-0.5) *0));
+    // velocity.imap(x=>vec2.fromValues((Math.random()-0.5) *0, (Math.random()-0.5) *0));
+
+    // for (let i = 0; i < numPoints * 2; i += 2) {
+    //     positions.array[i] = (Math.random()-0.5) *0;  // X coordinate
+    //     positions.array[i + 1] = (Math.random()-0.5) *0;  // Y coordinate
+    //     velocity.array[i] = (Math.random()-0.5) *0;  // X coordinate
+    //     velocity.array[i + 1] = (Math.random()-0.5) *0;  // Y coordinate
+    // }
+
+    const m3 =  {
+        value:[1000000.0, 0.0, 0.0],
+        count:0,
+        t0:0,
+        logvalue(){return[this.value[0],this.value[1]/this.count,this.value[2]];},
+        update(x){
+            this.count+=1;
+            this.value[0]=Math.min(this.value[0],x);
+            this.value[1]+= x;
+            this.value[2]=Math.max(this.value[2],x);
+        },
+        begin(){this.t0 = Date.now();},
+        end(){this.update(Date.now()-this.t0);},
+        reset(){ this.value=[1000000.0, 0.0, 0.0];this.count=0;this.t0=0; },
+        log(){console.log(this.logvalue());},
+    }
+    // let gridT=Object.create(m3);
+
+    function near(i, r = 20) {
+        const result = [];
+        const x = positions[i * 2];
+        const y = positions[i * 2 + 1];
+        const px=x+W/2;
+        const py=y+H/2;
+        const sW =W/gridW;
+        const sH =H/gridH;
+        
+        let i0= Math.max(0     ,Math.floor ((px-r)/sW));
+        let i1= Math.min(gridW ,Math.ceil  ((px+r)/sW));
+        let j0= Math.max(0     ,Math.floor ((py-r)/sH));
+        let j1= Math.min(gridH ,Math.ceil  ((py+r)/sH));
+        // const outgrid =_.range(i0,i1,1).flatMap(i=>_.range(j0,j1,1).map(j=>1+i+j*gridW));
+        const outgrid = []; for (let jj = j0; jj < j1; jj++) for (let ii = i0; ii < i1; ii++) outgrid.push(1 + ii + jj * gridW);
+
+        // const s2=Math.sqrt(2);
+        // i0=Math.ceil  ((px-r/s2)/sW);
+        // i1=Math.floor ((px+r/s2)/sW);
+        // j0=Math.ceil  ((py-r/s2)/sH);
+        // j1=Math.floor ((py+r/s2)/sH);
+        // const ingrid = _.range(i0,i1,1).flatMap(i=>_.range(j0,j1,1).map(j=>1+i+j*gridW));
+
+        // const neari = _.range(numPoints).filter(i=>outgrid.includes(grid[i]));
+        // const neari = outgrid.flatMap(x=>grid[x]);
+        const neari = []; for(let j of outgrid) neari.push(...grid[j]);
+
+        neari.forEach (j=>{            
+            if (j !== i) {
+                const dx = (positions[j*2]-x);
+                const dy = (positions[j*2+1]-y);
+                const distance = Math.sqrt(dx*dx + dy*dy);
+                if (distance < r) result.push({i:j,dx,dy,d:distance});
+            }
+        })
+
+        // for (let j = 0; j < numPoints; j++) {
+        //     const check = outgrid.includes(grid[j]);
+        //     if(check){
+        //         dt1 = Date.now();
+        //         if (j !== i) {
+        //             const dx = Math.abs(x - positions[j * 2]);
+        //             // if (dx<r){
+        //                 const dy = Math.abs(y - positions[j * 2 + 1]);
+        //                 // if (dy<r){
+        //                     const distance = Math.sqrt(dx*dx + dy*dy);
+        //                     if (distance < r) result.push(j);
+        //                 // }
+        //             // }
+        //         }
+        //         indistT += Date.now()-dt1;
+        //     }
+        // }
+        return result;
+    }
+
+    for (let i = 0; i < numPoints; i += 1) {
+        let px = positions[2*i];
+        let py = positions[2*i+1];
+        let vx = velocity[2*i];
+        let vy = velocity[2*i+1];
+
+        px= (Math.random()-0.5) *W/4;
+        py= (Math.random()-0.5) *H/4;
+        vx= (Math.random()-0.5) *0.01;
+        vy= (Math.random()-0.5) *0.01;
+
+        positions[2*i] = px;  // X coordinate
+        positions[2*i + 1] = py;  // Y coordinate
+        velocity[2*i] = vx;  // X coordinate
+        velocity[2*i + 1] = vy;  // Y coordinate
+        grid[assignGrid(px,py)].push(i);
+        // grid[i] = assignGrid(px,py);
+    }
+
+    // pointsGeometry.setAttribute('position', new THREE.BufferAttribute(df.p, 2));
+    pointsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 2));
+    pointsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 4));
+
+    // Camera position
+    camera.position.z = 5;
+
+    // FPS meter
+    const stats = new Stats();
+    stats.showPanel(1); // 0: FPS, 1: MS (milliseconds)
+    document.getElementById('stats').appendChild(stats.domElement);
+
+    // let gridS=Object.create(m3);
+    // let distS=Object.create(m3);
+    // let outS=Object.create(m3);
+    let accelerations = new Float32Array(2 * numPoints);
+    // // Vertlet old velocity
+    for(let i of _.range(2*numPoints)) accelerations[i]=0;
+    // // Vertlet future acceleration
+    // for (let i = 0; i < numPoints; i += 1) {
+    //     const ns=near(i);
+    //     let c = groups[i];
+    //     let ax2=0;
+    //     let ay2=0;
+    //     ns.forEach(n=>{
+    //         const nc=groups[n.i];
+    //         const k= force[c][nc].value(n.d);
+    //         ax2+=n.dx/n.d*k;
+    //         ay2+=n.dy/n.d*k;
+    //     });
+    //     accelerations[2*i]=ax2;
+    //     accelerations[2*i+1]=ay2;
+    // }
+
+    let count=0;
+    // Animation loop
+    const animate = function () {
+        requestAnimationFrame(animate);
+
+        // Update points position
+        // console.log('u');
+        // df.imap((p,v)=>{
+        //     vec2.add(p, p, v);
+        //     vec2.add(v, v, vec2.fromValues(0.1*(Math.random()-0.5), 0.1 *(Math.random()-0.5)));
+        //     return {p,v}
+        // })
+        // console.log('f');
+
+        // velocity.imap(x=>x + 0.1* vec2.fromValues((Math.random()-0.5), (Math.random()-0.5)));
+        // for (let i = 0; i < numPoints; i += 1)
+        //     positions[i] = positions[i] + velocity[i];
+
+        ngrid.forEach(x=>{x.length=0;});
+        // let dt1=Date.now();
+        for (let i = 0; i < numPoints; i += 1) {
+            // if(count==0)console.log(...positions);
+            let px = positions[2*i];
+            let py = positions[2*i+1];
+            let vx = velocity[2*i];
+            let vy = velocity[2*i+1];
+            let c = groups[i];
+            const v = Math.sqrt(vx*vx+vy*vy);
+            let friction=0.05; friction=1-friction;//Math.sqrt(Math.max(0,1-friction/v));
+            const ns=near(i);
+            
+            // // Experimental Integration
+            // vx*=friction;
+            // vy*=friction;
+
+            // let ax=0;
+            // let ay=0;
+            // ns.forEach(n=>{
+            //     const nc=groups[n.i];
+            //     const F= force[c][nc];
+            //     const ndx = n.dx-vx;
+            //     const ndy = n.dy-vy;
+            //     const nd = Math.sqrt(ndx*ndx + ndy*ndy);
+            //     // const k=(F.integral(n.d)-F.integral(nd))/(vx*n.dx + vy*n.dy);
+            //     // console.log(k,1/(vx*n.dx + vy*n.dy));
+            //     const dA=F.integral(nd)-F.integral(n.d);
+            //     const k=Math.sign(dA)*Math.sign(nd-n.d)*(Math.sqrt(Math.abs(2*dA))-(vx*n.dx + vy*n.dy)/n.d);
+
+            //     // if ((i%numPoints==0) && (count==0)){
+            //     // if(count==0)console.log([px,py],[vx,vy], n,k);
+            //     // }
+            //     ax+=(n.dx/n.d)*k;
+            //     ay+=(n.dy/n.d)*k;
+            // });
+
+            // px+=vx+ax/2;
+            // py+=vy+ay/2;
+            // vx+=ax;
+            // vy+=ay;
+
+            // // Euler integration
+            // let ax=0;
+            // let ay=0;
+            // ns.forEach(n=>{
+            //     const nc=groups[n.i];
+            //     const F=force[c][nc];
+            //     const k=F.value(n.d);
+            //     // if ((i%numPoints==0) && (count==0)){
+            //     // if(count==0)console.log([px,py],[vx,vy], n,k);
+            //     // }
+            //     ax+=n.dx/n.d*k;
+            //     ay+=n.dy/n.d*k;
+
+            //     // const nvx=vx+ax;
+            //     // const nvy=vy+ay;
+            //     // const nv = Math.sqrt(nvx*nvx + nvy*nvy);
+
+            //     // const ndx = n.dx-vx;
+            //     // const ndy = n.dy-vy;
+            //     // const nd = Math.sqrt(ndx*ndx + ndy*ndy);
+
+            //     // (F.integral(n.d)+v**2)-(F.integral(nd) +nv**2)
+
+
+                
+            // });
+
+            // vx*=friction;
+            // vy*=friction;
+            // vx+= ax;
+            // vy+= ay;
+            // px+= vx;
+            // py+= vy;
+
+            // if(count==0)console.log([px,py],...positions);
+            // let dt =Date.now();
+
+            // Vertlet integration (old velocity&acceleration)
+            let ax=accelerations[2*i];
+            let ay=accelerations[2*i+1];
+            let ax2=0;
+            let ay2=0;
+            ns.forEach(n=>{
+                const nc=groups[n.i];
+                const k= force[c][nc].value(n.d);
+                ax2+=n.dx/n.d*k;
+                ay2+=n.dy/n.d*k;
+            });
+            vx*=friction;
+            vy*=friction;
+            vx+=0.5*(ax+ax2);
+            vy+=0.5*(ay+ay2);
+            px += vx + 0.5*ax2;
+            py += vy + 0.5*ay2;
+            
+            // // Vertlet integration (current acceleration)
+            // let ax=accelerations[2*i];
+            // let ay=accelerations[2*i+1];
+            // px += vx + 0.5*ax;
+            // py += vy + 0.5*ay;
+            // let ax2=0;
+            // let ay2=0;
+            // ns.forEach(n=>{
+            //     const nc=groups[n.i];
+            //     const k= force[c][nc].value(n.d);
+            //     ax2+=n.dx/n.d*k;
+            //     ay2+=n.dy/n.d*k;
+            // });
+            // vx*=friction;
+            // vy*=friction;
+            // vx+=0.5*(ax+ax2);
+            // vy+=0.5*(ay+ay2);
+            
+            accelerations[2*i]=ax2;
+            accelerations[2*i+1]=ay2;
+            // Vertlet integration end
+
+
+            // dt=Date.now()-dt;
+            // mean+=dt/numPoints;
+            // min = Math.min(dt,min);
+            // max = Math.max(dt,max);
+
+            npositions[2*i] = px;  // X coordinate
+            npositions[2*i + 1] = py;  // Y coordinate
+            nvelocity[2*i] = vx;  // X coordinate
+            nvelocity[2*i + 1] = vy;  // Y coordinate
+            ngrid[assignGrid(px,py)].push(i);
+            // if(count==0)console.log([px,py],...npositions);
+        }
+        // dt1=Date.now()-dt1;
+        // mean+=dt1;
+        // min = Math.min(dt1,min);
+        // max = Math.max(dt1,max);
+        const tmp=grid; grid=ngrid; ngrid=tmp;
+        for (let i = 0; i < positions.length; i++) positions[i] = npositions[i];
+        for (let i = 0; i < velocity.length; i++) velocity[i] = nvelocity[i];
+        // gridS.update(gridT.value[1]);gridT.reset();
+        // distS.update(distT.value[1]);distT.reset();
+        // outS.update(outT.value[1]);outT.reset();
+        count=(count+1)%40;
+        // if(count==0){
+        //     console.table({
+        //         gridS:gridS.logvalue(),
+        //         distS:distS.logvalue(),
+        //         outS:outS.logvalue(),
+        //     });
+        //     gridS .reset();
+        //     distS .reset();
+        //     outS  .reset();
+        // }
+        // console.log(Math.sqrt((positions[0]-positions[2])**2+(positions[1]-positions[3])**2), Math.sqrt(velocity.reduce((a,x)=>a+x**2,0)),  [...positions]);
+        pointsGeometry.attributes.position.needsUpdate = true;
+       
+        stats.update();
+       
+        renderer.render(scene, camera);
+    };
+
+    animate();
+
+</script>
+
+</body>
+</html>
