@@ -18,6 +18,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/stats.js/r16/Stats.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gl-matrix/2.4.0/gl-matrix-min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/lodash.js/4.17.21/lodash.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19"></script>
 
 <script>
 
@@ -25,67 +26,29 @@
     const W=window.innerWidth;
     const H=window.innerHeight;
     const scene = new THREE.Scene();
-    const camera = new THREE.OrthographicCamera(W / -2, W / 2, H / 2, H / -2, 1, 1000);
+    const camera = new THREE.OrthographicCamera(W / -2, W / 2, H / 2, H / -2, 1, 1000); camera.position.z = 5;
     const renderer = new THREE.WebGLRenderer();
     renderer.setSize(W, H);
     document.body.appendChild(renderer.domElement);
 
+    const settings = {
+        numPoints: 2000,
+        groupscolors: [[0.5,1,0],[1,0,1]],
+        initializePoints: ()=>{initializePoints();pointsGeometry.attributes.color.needsUpdate = true;pointsGeometry.attributes.mass.needsUpdate = true;},
+    }
+
     // Set up points
-    const numPoints = 20000;//10000;//300000;
-    const pointsGeometry = new THREE.BufferGeometry();
-    const pointsMaterial = new THREE.ShaderMaterial({
-        vertexShader: `
-            attribute vec3 color;
-            //attribute float size;
-            attribute float mass;
-            varying vec4 vColor;
-
-            float cbrt( float x ){
-                float y = uintBitsToFloat(709973695u+floatBitsToUint(x)/3u);
-                y = y*(2.0/3.0) + (1.0/3.0)*x/(y*y);
-                y = y*(2.0/3.0) + (1.0/3.0)*x/(y*y);
-                return y;
-            }
-
-            float mysqrt( float x ){
-                float y = uintBitsToFloat(532545536u+(floatBitsToUint(x)>>1));
-                y = 0.5*(y+x/y);
-                y = 0.5*(y+x/y);
-                return y;
-            }
-    
-            void main() {
-                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-                gl_Position = projectionMatrix * mvPosition;
-                vColor = vec4(color,cbrt(mass)*0.333);
-                gl_PointSize = cbrt(mass);
-            }
-        `,
-        fragmentShader: `
-            varying vec4 vColor;
-            void main() {
-                gl_FragColor = vColor;
-            }
-        `,
-        // blending: THREE.AdditiveBlending,
-        depthTest: false,
-        transparent: true
-    });
-    // const pointsMaterial = new THREE.PointsMaterial({ size:4, vertexColors: true, transparent:true});
-    const points = new THREE.Points(pointsGeometry, pointsMaterial);
-
-    // Add points to scene
-    scene.add(points);
+    const {numPoints} = settings;//10000;//300000;
 
     let positions = new Float32Array(2 * numPoints);
     let npositions = new Float32Array(2 * numPoints);
     let velocity = new Float32Array(2 * numPoints);
     let nvelocity = new Float32Array(2 * numPoints);
-    const groups = new Uint16Array(numPoints); for(let i of _.range(groups.length)) groups[i]=Math.floor(2*Math.random());
-    const groupscolors = [[0.5,1,0],[1,0,1]]
-    const colors = new Float32Array(3 * numPoints); for(let i of _.range(numPoints)) for(let j of _.range(3)) colors[3*i+j]=groupscolors[groups[i]][j];
+    const groups = new Uint16Array(numPoints);
+    const colors = new Float32Array(3 * numPoints);
     // const sizes = new Float32Array(numPoints); for(let i of _.range(numPoints)) sizes[i]=Math.random()*8;
-    const masses = new Float32Array(numPoints); for(let i of _.range(numPoints)) masses[i]=1;
+    const masses = new Float32Array(numPoints);
+
     const cellsize=20;
     const gridW = Math.ceil(W/cellsize);
     const gridH = Math.ceil(H/cellsize);
@@ -94,35 +57,6 @@
     let ngrid = _.range(1+gridW*gridH).map(x=>[]);
 
     assignGrid = (px,py)=>(-W/2<px) && (px<W/2) && (-H/2<py) && (py<H/2) ?1+Math.floor((px/W +0.5)*gridW) + gridW*Math.floor((py/H +0.5)*gridH) :0;
-    
-    class Force {
-        constructor(X,Y){
-            this.X=X;
-            this.Y=Y;
-            this.meanY=[]; for(let i=0;i<Y.length-1;i++) this.meanY.push((Y[i]+Y[i+1])/2); this.meanY.push(Y.at(-1));
-            this.area =[]; for(let i=0;i<Y.length-1;i++) this.area.push(this.meanY[i]*(X[i+1]-X[i]));
-            this.sumarea = this.area.reduce((l,x)=>{l.push(l.at(-1)+x);return l;},[0])
-            this.slope=[]; for(let i=0;i<Y.length-1;i++) this.slope.push((Y[i+1]-Y[i])/(X[i+1]-X[i])); this.slope.push(0);
-        }
-        value(t){
-            const i=this.X.findLastIndex(x=>x<t);
-            const t2=t-this.X[i];
-            return this.Y[i]+this.slope[i]*t2;
-        }
-        integral(t){
-            // t=Math.abs(t);
-            const i=this.X.findLastIndex(x=>x<t);
-            const t2=t-this.X[i];
-            return this.sumarea[i] + t2 * (this.Y[i]+(this.Y[i]+this.slope[i]*t2))/2;
-        }
-    }
-
-    interp = (X,Y)=>(t)=>{if(X.at(-1)<t) return Y.at(-1); const i=X.findLastIndex(x=>x<t);return THREE.MathUtils.mapLinear(t,X[i],X[i+1],Y[i],Y[i+1]);}
-    
-    force=[
-        [new Force([0,20],[ 0.1,0]) , new Force([0,20],[-0.1,0])],
-        [new Force([0,20],[-0.1,0]) , new Force([0,20],[ 0.1,0])]
-    ];
 
     function near(i, r = 20) {
         const result = [];
@@ -179,38 +113,121 @@
         // }
         return result;
     }
-
-    for (let i = 0; i < numPoints; i += 1) {
-        let px = positions[2*i];
-        let py = positions[2*i+1];
-        let vx = velocity[2*i];
-        let vy = velocity[2*i+1];
-
-        px= (Math.random()-0.5) *W/4;
-        py= (Math.random()-0.5) *H/4;
-        vx= (Math.random()-0.5) *0.01;
-        vy= (Math.random()-0.5) *0.01;
-
-        positions[2*i] = px;  // X coordinate
-        positions[2*i + 1] = py;  // Y coordinate
-        velocity[2*i] = vx;  // X coordinate
-        velocity[2*i + 1] = vy;  // Y coordinate
-        grid[assignGrid(px,py)].push(i);
-        // grid[i] = assignGrid(px,py);
+    
+    class Force {
+        constructor(X,Y){
+            this.X=X;
+            this.Y=Y;
+            this.meanY=[]; for(let i=0;i<Y.length-1;i++) this.meanY.push((Y[i]+Y[i+1])/2); this.meanY.push(Y.at(-1));
+            this.area =[]; for(let i=0;i<Y.length-1;i++) this.area.push(this.meanY[i]*(X[i+1]-X[i]));
+            this.sumarea = this.area.reduce((l,x)=>{l.push(l.at(-1)+x);return l;},[0])
+            this.slope=[]; for(let i=0;i<Y.length-1;i++) this.slope.push((Y[i+1]-Y[i])/(X[i+1]-X[i])); this.slope.push(0);
+        }
+        value(t){
+            const i=this.X.findLastIndex(x=>x<t);
+            const t2=t-this.X[i];
+            return this.Y[i]+this.slope[i]*t2;
+        }
+        integral(t){
+            // t=Math.abs(t);
+            const i=this.X.findLastIndex(x=>x<t);
+            const t2=t-this.X[i];
+            return this.sumarea[i] + t2 * (this.Y[i]+(this.Y[i]+this.slope[i]*t2))/2;
+        }
     }
+    interp = (X,Y)=>(t)=>{if(X.at(-1)<t) return Y.at(-1); const i=X.findLastIndex(x=>x<t);return THREE.MathUtils.mapLinear(t,X[i],X[i+1],Y[i],Y[i+1]);}
+    force=[
+        [new Force([0,20],[ 0.1,0]) , new Force([0,20],[-0.1,0])],
+        [new Force([0,20],[-0.1,0]) , new Force([0,20],[ 0.1,0])]
+    ];
 
+    function updatecolors(){
+        for (let i = 0; i < numPoints; i += 1) for(let j of _.range(3)) colors[3*i+j]=settings.groupscolors[groups[i]][j];
+    }
+    function initializePoints(){
+        grid.forEach(x=>{x.length=0;});
+        ngrid.forEach(x=>{x.length=0;});
+        for (let i = 0; i < numPoints; i += 1) {
+            let px = positions[2*i];
+            let py = positions[2*i+1];
+            let vx = velocity[2*i];
+            let vy = velocity[2*i+1];
+
+            px= (Math.random()-0.5) *W/4;
+            py= (Math.random()-0.5) *H/4;
+            vx= (Math.random()-0.5) *0.01;
+            vy= (Math.random()-0.5) *0.01;
+
+            positions[2*i] = px;  // X coordinate
+            positions[2*i + 1] = py;  // Y coordinate
+            velocity[2*i] = vx;  // X coordinate
+            velocity[2*i + 1] = vy;  // Y coordinate
+            grid[assignGrid(px,py)].push(i);
+            // grid[i] = assignGrid(px,py);
+            groups[i]=Math.floor(2*Math.random());
+            masses[i]=1;
+        }
+        updatecolors();
+    }
+    initializePoints()
+
+    const pointsGeometry = new THREE.BufferGeometry();
+    const pointsMaterial = new THREE.ShaderMaterial({
+        vertexShader: `
+            attribute vec3 color;
+            //attribute float size;
+            attribute float mass;
+            varying vec4 vColor;
+
+            float cbrt( float x ){
+                float y = uintBitsToFloat(709973695u+floatBitsToUint(x)/3u);
+                y = y*(2.0/3.0) + (1.0/3.0)*x/(y*y);
+                y = y*(2.0/3.0) + (1.0/3.0)*x/(y*y);
+                return y;
+            }
+
+            float mysqrt( float x ){
+                float y = uintBitsToFloat(532545536u+(floatBitsToUint(x)>>1));
+                y = 0.5*(y+x/y);
+                y = 0.5*(y+x/y);
+                return y;
+            }
+    
+            void main() {
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+                vColor = vec4(color,cbrt(mass)*0.333);
+                gl_PointSize = cbrt(mass);
+            }
+        `,
+        fragmentShader: `
+            varying vec4 vColor;
+            void main() {
+                gl_FragColor = vColor;
+            }
+        `,
+        // blending: THREE.AdditiveBlending,
+        depthTest: false,
+        transparent: true
+    });
+    // const pointsMaterial = new THREE.PointsMaterial({ size:4, vertexColors: true, transparent:true});
+    const points = new THREE.Points(pointsGeometry, pointsMaterial);
+    scene.add(points);
     pointsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 2));
     pointsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     // pointsGeometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
     pointsGeometry.setAttribute('mass', new THREE.BufferAttribute(masses, 1));
 
-    // Camera position
-    camera.position.z = 5;
-
     // FPS meter
     const stats = new Stats();
     stats.showPanel(1); // 0: FPS, 1: MS (milliseconds)
     document.getElementById('stats').appendChild(stats.domElement);
+
+    // GUI
+    const panel = new lil.GUI( { width: 310 } );
+    panel.add(settings,"initializePoints");
+    panel.addColor(settings.groupscolors,"0").onChange(()=>{updatecolors();pointsGeometry.attributes.color.needsUpdate = true;});
+    panel.addColor(settings.groupscolors,"1").onChange(()=>{updatecolors();pointsGeometry.attributes.color.needsUpdate = true;});
 
     let accelerations = new Float32Array(2 * numPoints); for(let i of _.range(2*numPoints)) accelerations[i]=0;
 
