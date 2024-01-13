@@ -31,57 +31,61 @@
     document.body.appendChild(renderer.domElement);
 
     // Set up points
-    const numPoints = 5000;//10000;//300000;
+    const numPoints = 20000;//10000;//300000;
     const pointsGeometry = new THREE.BufferGeometry();
-    const pointsMaterial = new THREE.PointsMaterial({ size:4, vertexColors: true, transparent:true});
+    const pointsMaterial = new THREE.ShaderMaterial({
+        vertexShader: `
+            attribute vec3 color;
+            //attribute float size;
+            attribute float mass;
+            varying vec4 vColor;
+
+            float cbrt( float x ){
+                float y = uintBitsToFloat(709973695u+floatBitsToUint(x)/3u);
+                y = y*(2.0/3.0) + (1.0/3.0)*x/(y*y);
+                y = y*(2.0/3.0) + (1.0/3.0)*x/(y*y);
+                return y;
+            }
+
+            float mysqrt( float x ){
+                float y = uintBitsToFloat(532545536u+(floatBitsToUint(x)>>1));
+                y = 0.5*(y+x/y);
+                y = 0.5*(y+x/y);
+                return y;
+            }
+    
+            void main() {
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                gl_Position = projectionMatrix * mvPosition;
+                vColor = vec4(color,cbrt(mass)*0.333);
+                gl_PointSize = cbrt(mass);
+            }
+        `,
+        fragmentShader: `
+            varying vec4 vColor;
+            void main() {
+                gl_FragColor = vColor;
+            }
+        `,
+        // blending: THREE.AdditiveBlending,
+        depthTest: false,
+        transparent: true
+    });
+    // const pointsMaterial = new THREE.PointsMaterial({ size:4, vertexColors: true, transparent:true});
     const points = new THREE.Points(pointsGeometry, pointsMaterial);
 
     // Add points to scene
     scene.add(points);
 
-    // Random walk animation
-    // class VecArray {
-    //     constructor(dim, length) {
-    //         this.array = new Float32Array(length * dim);
-    //         this.dim = dim;
-    //         this.length = length;
-    //         // return new Proxy(this, {
-    //         //     get: (obj, key) => {
-    //         //         if (typeof(key) === 'string' && (Number.isInteger(Number(key))))
-    //         //             return vec2.fromValues(...obj.array.subarray(key, key + obj.dim))
-    //         //         else 
-    //         //             return obj[key]
-    //         //     },
-    //         //     set: (obj, key, value) => {
-    //         //         for (let j = 0; j < obj.dim; j++) obj[key + j] = value[j];
-    //         //     }
-    //         // })
-    //     }
-    //     map(callback) {
-    //         const result = new Float32Array(this.array.length);
-    //         for (let i = 0; i < this.array.length; i += this.dim) {
-    //             const mappedValues = callback(vec2.fromValues(...this.array.subarray(2*i, 2*i + this.dim)));                
-    //             for (let j = 0; j < this.dim; j++) result[i + j] = mappedValues[j];
-    //         }
-    //         return new VecArray(this.dim, result);
-    //     }
-    //     imap(callback) {
-    //         for (let i = 0; i < this.array.length; i += this.dim) {
-    //             const mappedValues = callback(vec2.fromValues(...this.array.subarray(2*i, 2*i + this.dim)));
-    //             for (let j = 0; j < this.dim; j++) this.array[2*i + j] = mappedValues[j];
-    //         }
-    //         return this
-    //     }
-    // }
-    // const positions = new VecArray(2, numPoints);
-    // const velocity = new VecArray(2, numPoints);
     let positions = new Float32Array(2 * numPoints);
     let npositions = new Float32Array(2 * numPoints);
     let velocity = new Float32Array(2 * numPoints);
     let nvelocity = new Float32Array(2 * numPoints);
     const groups = new Uint16Array(numPoints); for(let i of _.range(groups.length)) groups[i]=Math.floor(2*Math.random());
-    const groupscolors = [[0.5,1,0,0.3],[1,0,1,0.3]]
-    const colors = new Float32Array(4 * numPoints); for(let i of _.range(numPoints)) for(let j of _.range(4)) colors[4*i+j]=groupscolors[groups[i]][j];
+    const groupscolors = [[0.5,1,0],[1,0,1]]
+    const colors = new Float32Array(3 * numPoints); for(let i of _.range(numPoints)) for(let j of _.range(3)) colors[3*i+j]=groupscolors[groups[i]][j];
+    // const sizes = new Float32Array(numPoints); for(let i of _.range(numPoints)) sizes[i]=Math.random()*8;
+    const masses = new Float32Array(numPoints); for(let i of _.range(numPoints)) masses[i]=1;
     const cellsize=20;
     const gridW = Math.ceil(W/cellsize);
     const gridH = Math.ceil(H/cellsize);
@@ -119,55 +123,6 @@
         [new Force([0,20],[ 0.1,0]) , new Force([0,20],[-0.1,0])],
         [new Force([0,20],[-0.1,0]) , new Force([0,20],[ 0.1,0])]
     ];
-
-
-    // 46-60
-
-    // const df = {
-    //     length: numPoints,
-    //     p: new Float32Array(2 * numPoints),
-    //     v: new Float32Array(2 * numPoints),
-    // }
-    // df.imap = (f)=>{
-    //     for (let i = 0; i < df.length; i += 1) {
-    //         // const old= {p: df.p.subarray(2*i,2*i+2), v: df.v.subarray(2*i,2*i+2) };
-    //         // if(i==0) console.log(old);
-    //         const obj = f(df.p.subarray(2*i,2*i+2), df.v.subarray(2*i,2*i+2) );
-    //         for (let j = 0; j < 2; j += 1) df.p[2*i+j] = obj.p[j];
-    //         for (let j = 0; j < 2; j += 1) df.v[2*i+j] = obj.v[j];
-    //         // if(i==0) console.log(obj);
-    //     }
-    // }
-    // df.imap((p,v)=>{
-    //     return {p:vec2.fromValues(0* (Math.random()-0.5), 0* (Math.random()-0.5)), v:vec2.fromValues(0* (Math.random()-0.5), 0* (Math.random()-0.5))}})
-
-    // positions.imap(x=>vec2.fromValues((Math.random()-0.5) *0, (Math.random()-0.5) *0));
-    // velocity.imap(x=>vec2.fromValues((Math.random()-0.5) *0, (Math.random()-0.5) *0));
-
-    // for (let i = 0; i < numPoints * 2; i += 2) {
-    //     positions.array[i] = (Math.random()-0.5) *0;  // X coordinate
-    //     positions.array[i + 1] = (Math.random()-0.5) *0;  // Y coordinate
-    //     velocity.array[i] = (Math.random()-0.5) *0;  // X coordinate
-    //     velocity.array[i + 1] = (Math.random()-0.5) *0;  // Y coordinate
-    // }
-
-    const m3 =  {
-        value:[1000000.0, 0.0, 0.0],
-        count:0,
-        t0:0,
-        logvalue(){return[this.value[0],this.value[1]/this.count,this.value[2]];},
-        update(x){
-            this.count+=1;
-            this.value[0]=Math.min(this.value[0],x);
-            this.value[1]+= x;
-            this.value[2]=Math.max(this.value[2],x);
-        },
-        begin(){this.t0 = Date.now();},
-        end(){this.update(Date.now()-this.t0);},
-        reset(){ this.value=[1000000.0, 0.0, 0.0];this.count=0;this.t0=0; },
-        log(){console.log(this.logvalue());},
-    }
-    // let gridT=Object.create(m3);
 
     function near(i, r = 20) {
         const result = [];
@@ -244,9 +199,10 @@
         // grid[i] = assignGrid(px,py);
     }
 
-    // pointsGeometry.setAttribute('position', new THREE.BufferAttribute(df.p, 2));
     pointsGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 2));
-    pointsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 4));
+    pointsGeometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    // pointsGeometry.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+    pointsGeometry.setAttribute('mass', new THREE.BufferAttribute(masses, 1));
 
     // Camera position
     camera.position.z = 5;
@@ -256,50 +212,17 @@
     stats.showPanel(1); // 0: FPS, 1: MS (milliseconds)
     document.getElementById('stats').appendChild(stats.domElement);
 
-    // let gridS=Object.create(m3);
-    // let distS=Object.create(m3);
-    // let outS=Object.create(m3);
-    let accelerations = new Float32Array(2 * numPoints);
-    // // Vertlet old velocity
-    for(let i of _.range(2*numPoints)) accelerations[i]=0;
-    // // Vertlet future acceleration
-    // for (let i = 0; i < numPoints; i += 1) {
-    //     const ns=near(i);
-    //     let c = groups[i];
-    //     let ax2=0;
-    //     let ay2=0;
-    //     ns.forEach(n=>{
-    //         const nc=groups[n.i];
-    //         const k= force[c][nc].value(n.d);
-    //         ax2+=n.dx/n.d*k;
-    //         ay2+=n.dy/n.d*k;
-    //     });
-    //     accelerations[2*i]=ax2;
-    //     accelerations[2*i+1]=ay2;
-    // }
+    let accelerations = new Float32Array(2 * numPoints); for(let i of _.range(2*numPoints)) accelerations[i]=0;
 
-    let count=0;
+    const bindcount = []; for(let i of _.range(numPoints)) bindcount.push({})
+    const bindthis=[];
     // Animation loop
     const animate = function () {
         requestAnimationFrame(animate);
 
-        // Update points position
-        // console.log('u');
-        // df.imap((p,v)=>{
-        //     vec2.add(p, p, v);
-        //     vec2.add(v, v, vec2.fromValues(0.1*(Math.random()-0.5), 0.1 *(Math.random()-0.5)));
-        //     return {p,v}
-        // })
-        // console.log('f');
-
-        // velocity.imap(x=>x + 0.1* vec2.fromValues((Math.random()-0.5), (Math.random()-0.5)));
-        // for (let i = 0; i < numPoints; i += 1)
-        //     positions[i] = positions[i] + velocity[i];
-
         ngrid.forEach(x=>{x.length=0;});
-        // let dt1=Date.now();
         for (let i = 0; i < numPoints; i += 1) {
-            // if(count==0)console.log(...positions);
+            let m = masses[i]; if(m===0) continue
             let px = positions[2*i];
             let py = positions[2*i+1];
             let vx = velocity[2*i];
@@ -309,72 +232,7 @@
             let friction=0.05; friction=1-friction;//Math.sqrt(Math.max(0,1-friction/v));
             const ns=near(i);
             
-            // // Experimental Integration
-            // vx*=friction;
-            // vy*=friction;
-
-            // let ax=0;
-            // let ay=0;
-            // ns.forEach(n=>{
-            //     const nc=groups[n.i];
-            //     const F= force[c][nc];
-            //     const ndx = n.dx-vx;
-            //     const ndy = n.dy-vy;
-            //     const nd = Math.sqrt(ndx*ndx + ndy*ndy);
-            //     // const k=(F.integral(n.d)-F.integral(nd))/(vx*n.dx + vy*n.dy);
-            //     // console.log(k,1/(vx*n.dx + vy*n.dy));
-            //     const dA=F.integral(nd)-F.integral(n.d);
-            //     const k=Math.sign(dA)*Math.sign(nd-n.d)*(Math.sqrt(Math.abs(2*dA))-(vx*n.dx + vy*n.dy)/n.d);
-
-            //     // if ((i%numPoints==0) && (count==0)){
-            //     // if(count==0)console.log([px,py],[vx,vy], n,k);
-            //     // }
-            //     ax+=(n.dx/n.d)*k;
-            //     ay+=(n.dy/n.d)*k;
-            // });
-
-            // px+=vx+ax/2;
-            // py+=vy+ay/2;
-            // vx+=ax;
-            // vy+=ay;
-
-            // // Euler integration
-            // let ax=0;
-            // let ay=0;
-            // ns.forEach(n=>{
-            //     const nc=groups[n.i];
-            //     const F=force[c][nc];
-            //     const k=F.value(n.d);
-            //     // if ((i%numPoints==0) && (count==0)){
-            //     // if(count==0)console.log([px,py],[vx,vy], n,k);
-            //     // }
-            //     ax+=n.dx/n.d*k;
-            //     ay+=n.dy/n.d*k;
-
-            //     // const nvx=vx+ax;
-            //     // const nvy=vy+ay;
-            //     // const nv = Math.sqrt(nvx*nvx + nvy*nvy);
-
-            //     // const ndx = n.dx-vx;
-            //     // const ndy = n.dy-vy;
-            //     // const nd = Math.sqrt(ndx*ndx + ndy*ndy);
-
-            //     // (F.integral(n.d)+v**2)-(F.integral(nd) +nv**2)
-
-
-                
-            // });
-
-            // vx*=friction;
-            // vy*=friction;
-            // vx+= ax;
-            // vy+= ay;
-            // px+= vx;
-            // py+= vy;
-
-            // if(count==0)console.log([px,py],...positions);
-            // let dt =Date.now();
-
+            const wantstobind=[];
             // Vertlet integration (old velocity&acceleration)
             let ax=accelerations[2*i];
             let ay=accelerations[2*i+1];
@@ -382,9 +240,11 @@
             let ay2=0;
             ns.forEach(n=>{
                 const nc=groups[n.i];
-                const k= force[c][nc].value(n.d);
+                const nm=masses[n.i];
+                const k= nm*force[c][nc].value(n.d);
                 ax2+=n.dx/n.d*k;
                 ay2+=n.dy/n.d*k;
+                if((nc==c)&&(n.d<1)) wantstobind.push(n.i)
             });
             vx*=friction;
             vy*=friction;
@@ -393,73 +253,30 @@
             px += vx + 0.5*ax2;
             py += vy + 0.5*ay2;
             
-            // // Vertlet integration (current acceleration)
-            // let ax=accelerations[2*i];
-            // let ay=accelerations[2*i+1];
-            // px += vx + 0.5*ax;
-            // py += vy + 0.5*ay;
-            // let ax2=0;
-            // let ay2=0;
-            // ns.forEach(n=>{
-            //     const nc=groups[n.i];
-            //     const k= force[c][nc].value(n.d);
-            //     ax2+=n.dx/n.d*k;
-            //     ay2+=n.dy/n.d*k;
-            // });
-            // vx*=friction;
-            // vy*=friction;
-            // vx+=0.5*(ax+ax2);
-            // vy+=0.5*(ay+ay2);
-            
             accelerations[2*i]=ax2;
             accelerations[2*i+1]=ay2;
             // Vertlet integration end
 
-
-            // dt=Date.now()-dt;
-            // mean+=dt/numPoints;
-            // min = Math.min(dt,min);
-            // max = Math.max(dt,max);
-
-            npositions[2*i] = px;  // X coordinate
-            npositions[2*i + 1] = py;  // Y coordinate
-            nvelocity[2*i] = vx;  // X coordinate
-            nvelocity[2*i + 1] = vy;  // Y coordinate
+            npositions[2*i] = px;
+            npositions[2*i + 1] = py;
+            nvelocity[2*i] = vx;
+            nvelocity[2*i + 1] = vy;
             ngrid[assignGrid(px,py)].push(i);
-            // if(count==0)console.log([px,py],...npositions);
+            for(let j in bindcount[i]) if(!wantstobind.includes(Number(j))) delete bindcount[i][j];
+            for(let j of wantstobind) if(bindcount[i].hasOwnProperty(j)) {bindcount[i][j]++; if(bindcount[i][j]>4)bindthis.push([i,j]) }else bindcount[i][j]=0;
         }
-        // dt1=Date.now()-dt1;
-        // mean+=dt1;
-        // min = Math.min(dt1,min);
-        // max = Math.max(dt1,max);
         const tmp=grid; grid=ngrid; ngrid=tmp;
         for (let i = 0; i < positions.length; i++) positions[i] = npositions[i];
         for (let i = 0; i < velocity.length; i++) velocity[i] = nvelocity[i];
-        // gridS.update(gridT.value[1]);gridT.reset();
-        // distS.update(distT.value[1]);distT.reset();
-        // outS.update(outT.value[1]);outT.reset();
-        count=(count+1)%40;
-        // if(count==0){
-        //     console.table({
-        //         gridS:gridS.logvalue(),
-        //         distS:distS.logvalue(),
-        //         outS:outS.logvalue(),
-        //     });
-        //     gridS .reset();
-        //     distS .reset();
-        //     outS  .reset();
-        // }
-        // console.log(Math.sqrt((positions[0]-positions[2])**2+(positions[1]-positions[3])**2), Math.sqrt(velocity.reduce((a,x)=>a+x**2,0)),  [...positions]);
+        for (let p of bindthis){masses[p[0]]+=masses[p[1]];masses[p[1]]=0;/*console.log([...positions[p[0]]],[...positions[p[1]]])*/}
         pointsGeometry.attributes.position.needsUpdate = true;
+        pointsGeometry.attributes.mass.needsUpdate = true;
        
         stats.update();
        
         renderer.render(scene, camera);
     };
-
     animate();
-
 </script>
-
 </body>
 </html>
